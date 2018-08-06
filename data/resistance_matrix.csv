@@ -1,4 +1,4 @@
-differential,Pfs1RZ,Pfs2RZ,Pfs3RZ_C,Pfs4PV_C,Pfs5RZ_C,Pfs6RZ,Pfs7PV,Pfs8RZ_C,Pfs9RZ,Pfs10RZ,Pfs11PV,Pfs12RZ,Pfs13PV,Pfs14RZ,Pfs15RZ,Pfs16PV_C
+differential,pfs1,pfs2,pfs3,pfs4,pfs5,pfs6,pfs7,pfs8,pfs9,pfs10,pfs11,pfs12,pfs13,pfs14,pfs15,pfs16
 viroflay,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
 resistoflay,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1
 califlay,0,1,0,1,0,1,1,0,0,1,0,0,1,0,1,0
