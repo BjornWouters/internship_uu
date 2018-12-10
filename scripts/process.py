@@ -8,15 +8,19 @@
 # Known bugs: None found yet
 # # # # # # # # # # # # # # # # # # # ## # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
+import csv
 import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pprint
 import seaborn as sns
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, \
+    RandomForestRegressor
 from sklearn.metrics import auc
 from sklearn.model_selection import LeaveOneOut
+from sklearn.neural_network import MLPClassifier
 from sklearn.utils import resample
 
 
@@ -25,6 +29,7 @@ class Roc:
     Roc class
     Attributes and function for calculating Roc plot features
     """
+
     def __init__(self):
         self.tp = 0
         self.fp = 0
@@ -40,8 +45,8 @@ class Roc:
         scores = [value[0] for value in self.probabilities]
         min_score = min(scores)
         max_score = max(scores)
-        # Divides the probabilities into 500 equal distributed values
-        thr = np.linspace(min_score, max_score, 500)
+        # Divides the probabilities into n(scores) equal distributed values
+        thr = np.linspace(min_score, max_score, len(scores))
         total_positives = sum(counted_values)
         total_negatives = len(counted_values) - total_positives
 
@@ -53,25 +58,59 @@ class Roc:
                     else:
                         self.fp += 1
 
-            self.tpr_list.append(self.tp/float(total_positives))
-            self.fpr_list.append(self.fp/float(total_negatives))
+            self.tpr_list.append(self.tp / float(total_positives))
+            self.fpr_list.append(self.fp / float(total_negatives))
             self.tp = 0
             self.fp = 0
+
+
+class Results:
+    def __init__(self):
+        self.final_results = dict()
+
+    def update_results(self, results, differential):
+        if differential not in self.final_results:
+            self.final_results.update({differential: dict()})
+
+        for gene, prob in results:
+            if gene in self.final_results[differential]:
+                self.final_results[differential][gene] += prob
+            else:
+                self.final_results[differential].update({gene: prob})
+
+    def write_results(self, file):
+        processed_genes = set()
+        with open(file, 'w') as csvfile:
+            differentials = self.final_results.keys()
+            header = ['gene'] + list(differentials)
+            writer = csv.writer(csvfile, delimiter=',', quoting=csv.QUOTE_NONE, quotechar='',
+                                escapechar='\\')
+            writer.writerow(header)
+            for differential in differentials:
+                for gene in self.final_results[differential]:
+                    if gene not in processed_genes:
+                        output = [0] * len(differentials)
+                        for i, differential_check in enumerate(differentials):
+                            if gene in self.final_results[differential_check]:
+                                output[i] = self.final_results[differential_check][gene]
+
+                        processed_genes.add(gene)
+                        writer.writerow([gene] + output)
 
 
 def import_data():
     """
     Data import function, converts csv to pandas dataframes
     """
-    gene_data = '../data/parsed_snps.csv'
+    gene_data = '../data/all_features.csv'
     resistance_data = '../data/resistance_matrix.csv'
-    test_data = '../data/prepared_test_dataset.csv'
+    weight_data = '../data/reliability_scores.csv'
     coverage_df = pd.read_csv(gene_data, index_col=0)
     resistance_df = pd.read_csv(resistance_data, index_col=0)
-    test_df = pd.read_csv(test_data, index_col=0).transpose()
-    # Commend this line if the test set has to be predicted
-    test_df = pd.DataFrame()
-    return resistance_df, coverage_df, test_df
+    test_df = coverage_df[[
+        'A-03', 'Es-13', 'F-05', 'Nl-05', 'Us-11', 'Us-13a', 'Us-13b', 'Us-15'
+    ]]
+    return resistance_df, coverage_df, test_df, weight_data
 
 
 def process_rows(differential, coverage_df):
@@ -82,11 +121,11 @@ def process_rows(differential, coverage_df):
     :return: Matrix with classes for ML training purpose
     """
     gene_df = pd.DataFrame()
-    variants = ['_snp']
+    variants = ['']
 
     for variant in variants:
         for i, name in enumerate(differential.index):
-            gene_series = coverage_df[name + variant]
+            gene_series = coverage_df[name.title() + variant]
             resistance = pd.Series(differential[i])
             resistance.index = ['resistance']
             gene_series = gene_series.append(resistance)
@@ -143,9 +182,10 @@ def fit_classifier(clf, x_train, y_train):
     clf.fit(x_train, y_train)
 
 
-def train_differntial_model(df, predict_df, name, roc, randomized, test_data=pd.DataFrame()):
+def train_differntial_model(df, predict_df, name, roc, randomized,
+                            test_data=pd.DataFrame(), weight=None):
     """
-    :param df: Input dataframe; the genes i.c.w. their outcome (1/0)
+    :param df: Input Dataframe; the genes i.c.w. their outcome (1/0)
     :param predict_df: Dataframe to save the outcomes of the predictions
     :param name: Name of the current differential
     :param roc: Roc class declared in the main function
@@ -153,21 +193,21 @@ def train_differntial_model(df, predict_df, name, roc, randomized, test_data=pd.
     :param test_data: Dataframe of the non-pfs isolates (optional)
     :return:
     """
+    feature_dict = dict()
     loo = LeaveOneOut()
     y = df['resistance']
     x = df.drop('resistance', 1)
-    clf = GradientBoostingClassifier(
-        random_state=0,
-        max_depth=2,
-        n_estimators=200,
-        min_samples_leaf=6,
-        learning_rate=0.2,
-        subsample=0.8
-    )
-    # clf = RandomForestClassifier(
+    # clf = GradientBoostingClassifier(
     #     random_state=0,
     #     n_estimators=100,
     # )
+    clf = RandomForestClassifier(
+        random_state=0,
+        n_estimators=100,
+        max_leaf_nodes=4,
+        max_features=10,
+    )
+    # clf = MLPClassifier(hidden_layer_sizes=(15, 4), random_state=0)
     count = 0
     correct = 0
 
@@ -177,8 +217,11 @@ def train_differntial_model(df, predict_df, name, roc, randomized, test_data=pd.
         prediction = pd.Series(clf.predict(test_data))
         prediction.index = test_data.index
         prediction.name = name
-        predict_df[name] = prediction
-        return 0, roc
+        if weight == 0.95:
+            predict_df[name] = prediction
+        else:
+            predict_df[name] += prediction
+        return 0, roc, None
 
     # Iterates while leaving out one class at the time
     for train, test in loo.split(df):
@@ -205,38 +248,64 @@ def train_differntial_model(df, predict_df, name, roc, randomized, test_data=pd.
         else:
             roc.probabilities.append([probability, 0])
 
-        # Set prediction dataframe
+        # Set prediction dataframe                row = differential[1].sample(frac=1)
+
         gene_name = y_test.index[0]
 
         # Only first non-random iteration
         if not randomized:
-            # True positive
-            if actual == 1 and prediction == 1:
-                predict_df.loc[name, gene_name] = 2
-            # False positive
-            elif actual == 0 and prediction == 1:
-                predict_df.loc[name, gene_name] = 1
-            # False negative
-            elif actual == 1 and prediction == 0:
-                predict_df.loc[name, gene_name] = -1
-            # True positive
-            elif actual == 0 and prediction == 0:
-                predict_df.loc[name, gene_name] = -2
+
+            if weight == 0.95:
+                # True positive
+                if prediction == 1:
+                    predict_df.loc[name, gene_name] = 1
+                else:
+                    predict_df.loc[name, gene_name] = 0
+            else:
+                # True positive
+                if prediction == 1:
+                    predict_df.loc[name, gene_name] += 1
+                else:
+                    predict_df.loc[name, gene_name] += 0
+            # # True positive
+            # if actual == 1 and prediction == 1:
+            #     predict_df.loc[name, gene_name] = 2
+            # # False positive
+            # elif actual == 0 and prediction == 1:
+            #     predict_df.loc[name, gene_name] = 1
+            # # False negative
+            # elif actual == 1 and prediction == 0:
+            #     predict_df.loc[name, gene_name] = -1
+            # # True positive
+            # elif actual == 0 and prediction == 0:
+            #     predict_df.loc[name, gene_name] = -2
 
             # predict_df.loc[name, gene_name] = probability
 
         count += 1
 
-    score = correct/count*100
+        top_10_features_index = np.argsort(clf.feature_importances_)[-10:]
+        top_10_genes = x_train.iloc[:, top_10_features_index].columns.values
+        probabilities = [clf.feature_importances_[i] for i in top_10_features_index]
+        for i, gene in enumerate(top_10_genes):
+            if gene not in feature_dict:
+                feature_dict.update({gene: probabilities[i]})
+            else:
+                feature_dict[gene] += probabilities[i]
+
+    score = correct / count * 100
 
     if not randomized:
-        top_5_features_index = np.argsort(clf.feature_importances_)[-5:]
-        print('Partial score of differential ' + name + ': ' + str(score) + '%')
-        print(x_train.iloc[:, top_5_features_index].columns.values)
-        print('Probabilities: ' + ' '.join([str(clf.feature_importances_[i])
-                                            for i in top_5_features_index]))
+        # top_5_features_index = np.argsort(clf.feature_importances_)[-5:]
+        results = sorted(feature_dict.items(), key=lambda kv: kv[1])
+        # print('Partial score of differential ' + name + ': ' + str(score) + '%')
+        # pprint.pprint(sorted(feature_dict.items(), key=lambda kv: kv[1]))
+        #
+        # print(x_train.iloc[:, top_5_features_index].columns.values)
+        # print('Probabilities: ' + ' '.join([str(clf.feature_importances_[i])
+        #                                     for i in top_5_features_index]))
 
-    return score, roc
+    return score, roc, results
 
 
 def plot_auc(roc):
@@ -264,46 +333,65 @@ def main():
     """
     # Number of iterations. > 1 means you compare it against permuted resistance matrices
     iterations = 1
-
-    resistance_df, coverage_df, test_df = import_data()
+    results_output = '../results/gene_predictions_test.csv'
+    resistance_df, coverage_df, test_df, weight_data = import_data()
+    weight_df = pd.read_csv(weight_data, index_col='mrna_id', header=0)
     resistance_predicted_df = pd.DataFrame()
     total_score = 0
     roc = Roc()
+    results = Results()
     randomize = False
 
-    for i in range(iterations):
-        # Don't permute the first iteration
-        if i >= 1:
-            randomize = True
+    for weight in np.linspace(0.95, 0.50, 10):
+        temp_weight_df = weight_df[weight_df.mean(axis=1) > weight]
+        temp_coverage_df = coverage_df.loc[temp_weight_df.index].dropna()
+        temp_test_df = test_df.loc[temp_weight_df.index].dropna().transpose()
+        temp_test_df = pd.DataFrame()
 
-        # Start from the second row, viroflay isn't interesting
-        for differential in resistance_df[1:].iterrows():
-            row = differential[1]
-            if randomize:
-                row = differential[1].sample(frac=1)
+        for i in range(iterations):
+            # Don't permute the first iteration
+            if i >= 1:
+                randomize = True
 
-            processed_coverage = process_rows(row, coverage_df)
+            # Start from the second row, viroflay isn't interesting
+            for differential in resistance_df[1:].iterrows():
+                row = differential[1]
+                if randomize:
+                    row = differential[1].sample(frac=1)
 
-            score, roc = train_differntial_model(processed_coverage, resistance_predicted_df,
-                                                 differential[0], roc, randomize, test_df)
+                processed_coverage = process_rows(row, temp_coverage_df)
 
-            total_score += score
+                score, roc, clf_results = train_differntial_model(
+                    processed_coverage,
+                    resistance_predicted_df,
+                    differential[0],
+                    roc,
+                    randomize,
+                    temp_test_df,
+                    weight
+                )
 
-        if not randomize:
-            print('\nTotal accuracy: ' + str(total_score/len(resistance_df[1:])) + '%')
-            # Show the predicted differentials
-            if not test_df.empty:
-                sns.heatmap(resistance_predicted_df.transpose())
-                plt.show()
-                sys.exit(0)
-            sns.heatmap(resistance_predicted_df)
-            plt.title('Predicted resistance matrix')
-            # plt.show()
-            plot_auc(roc)
-        else:
-            print('\nTotal accuracy (random): ' + str(total_score/len(resistance_df[1:])) + '%')
+                if temp_test_df.empty:
+                    results.update_results(clf_results, row.name)
 
-        total_score = 0
+                total_score += score
+
+    if not randomize:
+        print('\nTotal accuracy: ' + str(total_score / len(resistance_df[1:])) + '%')
+        # Show the predicted differentials
+        if not temp_test_df.empty:
+            sns.heatmap(resistance_predicted_df.transpose())
+            plt.show()
+            sys.exit(0)
+
+        results.write_results(results_output)
+        sns.heatmap(resistance_predicted_df)
+        plt.title('Predicted resistance matrix')
+        plot_auc(roc)
+    else:
+        print('\nTotal accuracy (random): ' + str(total_score / len(resistance_df[1:])) + '%')
+
+    total_score = 0
 
 
 if __name__ == '__main__':
